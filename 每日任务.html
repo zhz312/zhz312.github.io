@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>408每日任务生成器 | 考研复习助手</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #f5f7fa;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            padding: 1rem;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+            margin: 0 auto;
+            background: white;
+            border-radius: 32px;
+            box-shadow: 0 20px 35px -12px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            padding: 1.5rem 1.8rem 2rem;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #1e2a3a, #0f2b3d);
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            margin-bottom: 0.25rem;
+        }
+
+        .sub {
+            color: #5b6e8c;
+            margin-bottom: 2rem;
+            font-size: 0.9rem;
+            border-left: 3px solid #3b82f6;
+            padding-left: 0.75rem;
+        }
+
+        .button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.8rem;
+            margin-bottom: 2rem;
+        }
+
+        .btn {
+            background: #f0f2f5;
+            border: none;
+            padding: 0.7rem 1.2rem;
+            border-radius: 60px;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #1e293b;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex: 1 0 auto;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        .btn:hover {
+            background: #e2e8f0;
+            transform: translateY(-1px);
+        }
+
+        .btn-primary {
+            background: #1e3a5f;
+            color: white;
+            box-shadow: 0 4px 8px rgba(30,58,95,0.2);
+        }
+
+        .btn-primary:hover {
+            background: #0f2b3d;
+        }
+
+        .btn-subject {
+            background: white;
+            border: 1px solid #cbd5e1;
+        }
+
+        .btn-subject[data-subject="ds"] { border-left: 4px solid #3b82f6; }
+        .btn-subject[data-subject="co"] { border-left: 4px solid #10b981; }
+        .btn-subject[data-subject="os"] { border-left: 4px solid #f59e0b; }
+        .btn-subject[data-subject="cn"] { border-left: 4px solid #ef4444; }
+
+        .task-card {
+            background: #f8fafc;
+            border-radius: 28px;
+            padding: 1.5rem;
+            margin: 1.5rem 0 1rem;
+            min-height: 200px;
+            border: 1px solid #e2edff;
+        }
+
+        .task-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .task-list li {
+            background: white;
+            margin: 0.8rem 0;
+            padding: 1rem 1rem 1rem 1.8rem;
+            border-radius: 40px;
+            font-size: 1rem;
+            line-height: 1.4;
+            position: relative;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            color: #0f172a;
+        }
+
+        .task-list li::before {
+            content: "📌";
+            position: absolute;
+            left: 12px;
+            top: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .empty-tip {
+            color: #6c86a3;
+            text-align: center;
+            padding: 2rem 0;
+            font-style: italic;
+        }
+
+        .footer-note {
+            font-size: 0.75rem;
+            text-align: center;
+            color: #8ba0bc;
+            margin-top: 2rem;
+            border-top: 1px solid #eef2f6;
+            padding-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📚 408每日任务生成器</h1>
+    <div class="sub">随机抽选 · 对抗迷茫 · 每天进步一点点</div>
+
+    <div class="button-group">
+        <button class="btn btn-subject" data-subject="ds">🌲 数据结构</button>
+        <button class="btn btn-subject" data-subject="co">⚙️ 计算机组成原理</button>
+        <button class="btn btn-subject" data-subject="os">💿 操作系统</button>
+        <button class="btn btn-subject" data-subject="cn">🌐 计算机网络</button>
+    </div>
+    <div class="button-group">
+        <button class="btn btn-primary" id="randomAllBtn">🎲 随机混合 (四门混搭)</button>
+    </div>
+
+    <div class="task-card">
+        <div id="taskListArea">
+            <div class="empty-tip">✨ 点击上方科目，生成今日复习任务 ✨</div>
+        </div>
+    </div>
+    <div class="footer-note">
+        💡 小提示：每天固定3个任务，精准打击薄弱点 | 后期将增加“自定义任务包”
+    </div>
+</div>
+
+<script>
+    // ------------------- 任务库（按科目分类）--------------------
+    // 你可以随意增删、修改下面的任务条目
+    const tasks = {
+        // 数据结构
+        ds: [
+            "📌 手写单链表的反转（迭代+递归）",
+            "📌 背诵快速排序 / 归并排序的算法思想，并手写代码",
+            "📌 用栈实现表达式求值（中缀转后缀）",
+            "📌 复习二叉树的前/中/后序遍历（递归与非递归）",
+            "📌 画出B树插入/删除的调整过程（选3~5个例子）",
+            "📌 做5道关于哈希表冲突解决（链地址/线性探测）的选择题",
+            "📌 手写KMP算法的next数组计算过程",
+            "📌 复习图的邻接表与邻接矩阵存储，写出Dijkstra的步骤",
+            "📌 王道课后大题：树与二叉树章节 至少3题",
+            "📌 理解并口述红黑树的5条性质"
+        ],
+        // 计算机组成原理
+        co: [
+            "📌 背诵IEEE754单精度浮点数表示范围，做2道转换题",
+            "📌 画出一个Cache直接映射/组相连映射的地址划分图",
+            "📌 复习指令执行流程（取指、译码、执行）",
+            "📌 计算CPI、MIPS和程序执行时间（给出典型例题）",
+            "📌 画出原码一位乘/补码Booth算法的运算过程",
+            "📌 理解流水线冒险及解决方法（数据/控制冒险）",
+            "📌 做3道关于主存与Cache平均访问时间的计算题",
+            "📌 复习硬布线控制器与微程序控制器的对比",
+            "📌 王道真题：寻址方式与指令格式设计",
+            "📌 画出DMA传送流程，比较中断与DMA的适用场景"
+        ],
+        // 操作系统
+        os: [
+            "📌 用信号量实现生产者-消费者问题（写伪代码）",
+            "📌 复习进程状态转换图，解释引起转换的典型事件",
+            "📌 银行家算法例题：判断安全序列，计算Need矩阵",
+            "📌 页面置换算法：手算LRU、FIFO、Clock的缺页次数",
+            "📌 逻辑地址转换为物理地址（分页/分段系统）",
+            "📌 简述虚拟内存的原理及页面抖动的原因",
+            "📌 分析FAT与i-node文件系统的区别",
+            "📌 做一道磁盘调度（先来先服务、最短寻道）计算题",
+            "📌 王道课后题：死锁的四个必要条件及预防方法",
+            "📌 写出读者-写者问题（读者优先/写者优先）的伪代码"
+        ],
+        // 计算机网络
+        cn: [
+            "📌 画出OSI与TCP/IP模型对应关系，列出各层协议",
+            "📌 子网划分与CIDR：给定IP地址块，计算子网掩码/广播地址",
+            "📌 解释CSMA/CD的工作过程及最小帧长公式",
+            "📌 复习TCP拥塞控制（慢开始、拥塞避免、快重传）",
+            "📌 一道RIP距离向量算法更新路由表的例题",
+            "📌 分析HTTP/1.1、HTTP/2.0、HTTP/3.0的主要改进",
+            "📌 做一道关于停止等待协议、GBN、SR的窗口计算题",
+            "📌 理解DNS递归查询与迭代查询的区别",
+            "📌 背诵三次握手、四次挥手的状态变迁及seq/ack变化",
+            "📌 复习ARP协议工作原理及ARP欺骗基础"
+        ]
+    };
+
+    // 辅助函数：从数组中随机取 n 个不同元素（n 不超过数组长度，一般取2~3）
+    function getRandomItems(arr, n) {
+        if (!arr || arr.length === 0) return [];
+        const shuffled = [...arr];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return shuffled.slice(0, Math.min(n, shuffled.length));
+    }
+
+    // 渲染任务列表
+    function renderTasks(taskItems) {
+        const container = document.getElementById('taskListArea');
+        if (!taskItems || taskItems.length === 0) {
+            container.innerHTML = '<div class="empty-tip">📭 没有找到任务，稍后再试吧~</div>';
+            return;
+        }
+        const ul = document.createElement('ul');
+        ul.className = 'task-list';
+        taskItems.forEach(task => {
+            const li = document.createElement('li');
+            li.textContent = task.replace(/^📌\s*/, '');   // 去掉开头的emoji（如果有重复）
+            li.style.paddingLeft = '2rem';
+            li.style.position = 'relative';
+            // 保留原始图标的显示（避免📌重复）
+            if (!task.includes('📌')) {
+                li.style.paddingLeft = '2rem';
+                const mark = document.createElement('span');
+                mark.textContent = '📌';
+                mark.style.position = 'absolute';
+                mark.style.left = '12px';
+                mark.style.top = '1rem';
+                li.appendChild(mark);
+            }
+            ul.appendChild(li);
+        });
+        container.innerHTML = '';
+        container.appendChild(ul);
+    }
+
+    // 按科目生成任务
+    function generateBySubject(subjectKey) {
+        const taskArray = tasks[subjectKey];
+        if (!taskArray || taskArray.length === 0) {
+            renderTasks([]);
+            return;
+        }
+        // 固定取 3 个任务
+        const count = Math.min(3, taskArray.length);
+        const selected = getRandomItems(taskArray, count);
+        renderTasks(selected);
+    }
+
+    // 随机混合（从所有科目中抽取）
+    function generateMixed() {
+        const allTasks = [
+            ...(tasks.ds || []),
+            ...(tasks.co || []),
+            ...(tasks.os || []),
+            ...(tasks.cn || [])
+        ];
+        if (allTasks.length === 0) {
+            renderTasks([]);
+            return;
+        }
+        const count = Math.min(3, allTasks.length);
+        const selected = getRandomItems(allTasks, count);
+        renderTasks(selected);
+    }
+
+    // 绑定按钮事件
+    function bindEvents() {
+        // 科目按钮
+        const subjectBtns = document.querySelectorAll('.btn-subject');
+        subjectBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const subject = btn.getAttribute('data-subject');
+                if (subject && tasks[subject]) {
+                    generateBySubject(subject);
+                } else {
+                    generateMixed(); // fallback
+                }
+            });
+        });
+        // 随机混合按钮
+        const randomBtn = document.getElementById('randomAllBtn');
+        if (randomBtn) {
+            randomBtn.addEventListener('click', () => {
+                generateMixed();
+            });
+        }
+    }
+
+    // 初始化页面（可选默认展示一些提示，不自动生成任务）
+    function init() {
+        bindEvents();
+        // 初次打开显示友好提示，不自动生成任务（让用户主动点击）
+        const container = document.getElementById('taskListArea');
+        container.innerHTML = '<div class="empty-tip">✨ 点击上方科目，生成今日复习任务 ✨</div>';
+    }
+
+    init();
+</script>
+</body>
+</html>
