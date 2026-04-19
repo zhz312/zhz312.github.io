@@ -245,6 +245,18 @@ body {
   cursor: not-allowed;
 }
 
+.btn-pause {
+  background: #C0392B;
+  border-color: #C0392B;
+  color: white;
+}
+
+.btn-pause:hover {
+  background: #A93226;
+  border-color: #A93226;
+  color: white;
+}
+
 /* Paragraphs */
 #paragraphList {
   flex: 1;
@@ -525,7 +537,8 @@ body {
 
 <div class="translate-btns" id="translateBtns">
   <button class="btn" onclick="translatePage()">转译当前页</button>
-  <button class="btn btn-primary" id="translateAllBtn" onclick="translateAll()">一键全部转译</button>
+  <button class="btn btn-primary" id="autoBtn" onclick="toggleAutoTranslate()">▶ 自动转译</button>
+  <button class="btn" id="translateAllBtn" onclick="translateAll()">一键全部转译</button>
 </div>
 
 <!-- Toast -->
@@ -537,9 +550,19 @@ let pdfDoc = null;
 let allPages = []; // [{pageNum, imageData, translated}]
 let currentPage = 0;
 let isTranslating = false;
+let currentAbort = null; // 当前翻译的取消控制器
+let autoTranslate = false; // 自动转译开关
 
 // ===== PDF.js Setup =====
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// 读取保存的 API Key
+const apiKeyInput = document.getElementById('apiKey');
+const savedKey = localStorage.getItem('deepseek_api_key');
+if (savedKey) apiKeyInput.value = savedKey;
+apiKeyInput.addEventListener('input', () => {
+  localStorage.setItem('deepseek_api_key', apiKeyInput.value.trim());
+});
 
 // ===== Upload Handling =====
 const uploadBox = document.getElementById('uploadBox');
@@ -624,7 +647,7 @@ async function renderPage() {
         <div class="para-label label-trans">大白话</div>
         <div id="trans-content-0">
           ${page.translated
-            ? escapeHtml(page.translated)
+            ? formatText(page.translated)
             : '<span style="color:var(--text-hint);font-size:13px;">点击上方"转译当前页"开始</span>'}
         </div>
       </div>
@@ -648,154 +671,257 @@ function updateProgress() {
   document.getElementById('progressFill').style.width = pct + '%';
 }
 
+const SYSTEM_PROMPT = `你是中国顶级的知识通俗化写手，风格融合了万维钢"精英日课"的严谨有趣、最优质知乎长文的亲切感。
+
+你的读者是：受过大学教育、聪明但没有专业背景、时间宝贵、对枯燥文字没有耐心。读完之后他们要感觉"原来如此，这我真懂了"，而不是"嗯……好像明白了？"
+
+【铁律】原文每一步推导都必须保留，一步都不能跳，但要用读者自己的语言重新讲一遍。
+
+【语言规则】
+- 句子≤20字，超过立刻拆开
+- 全程用"你"和读者说话，有对话感
+- 术语第一次出现：先用一句比喻解释它，再用（）标注原词，之后直接用白话
+- 数字必须有参照系：不说"增长了300%"，说"相当于原来的4倍"
+- 每段只讲一件事，80-120字，段间必须空行，段内不换行
+- 并列内容用①②③各自独立成行
+- 反常识或重要结论前单独加"注意——"
+- 关键词**加粗**
+- 话题切换用---
+
+【句式工具箱（自然融入，不要每段都用）】
+"说白了就是……"／"问题来了……"／"你可能以为……但实际上……"
+"关键就在这里——"／"这就导致了……"／"正因为……，所以……"
+
+【结构】
+第一段：最抓人的核心观点，或一个让读者想继续读的反常识点
+中间段：按逻辑链逐步展开，每段一个环节，段与段之间要有因果衔接词
+最后段：结论是什么 + 这对读者意味着什么
+
+【类比原则】
+优先用读者有亲身体验的场景：高考、房价、打工、外卖、健身、谈恋爱
+类比只用来解释概念，不超过两句，解释完立刻回到正题
+
+【绝对禁止】
+× "简言之""综上所述""由此可见""不难发现""换言之""首先""其次""最后"
+× "第一步""第二步""第三步"——用自然的因果衔接词替代，比如"正因为这样……""这就带来了……""接下来问题来了……"
+× 逐句对译，保留原文语序
+× 学术腔句式，例如"X对Y产生了深远影响"→改成"X让Y彻底变了"
+× 被动语态"被认为是"→改成"大家公认"或直接说"研究发现"
+× 省略作者的任何论证细节
+× 加入原文没有的观点`;
+
+const ANALYZE_PROMPT = `你是资深编辑，专门帮助通俗化写手理解学术文本。分析以下文本，严格按JSON输出，不要任何其他内容：
+{"core_point":"作者这一段最想让读者记住的ONE件事（一句话说清楚）","why_matters":"这件事为什么重要，对普通人意味着什么","logical_chain":["第一步推导（要完整，不能跳步）","第二步","..."],"confusing_parts":["中国读者最容易在哪里卡住","..."],"key_concepts":[{"term":"术语","plain":"白话含义","analogy":"建议用什么比喻来解释"}],"conclusion":"最终结论","tone":"原文语气：严肃论证/举例说明/反驳观点/下定义/其他"}`;
+
 // ===== Translation =====
-async function translatePageImage(pageIdx) {
+async function translatePageImage(pageIdx, signal, silent = false) {
   const apiKey = document.getElementById('apiKey').value.trim();
-  if (!apiKey) { showToast('请先输入 DeepSeek API Key'); return false; }
+  if (!apiKey) { if (!silent) showToast('请先输入 DeepSeek API Key'); return false; }
+  if (/[^\x00-\xFF]/.test(apiKey)) { if (!silent) showToast('API Key 含有非法字符，请重新粘贴'); return false; }
 
   const page = allPages[pageIdx];
   if (page.translated) return true;
 
-  const block = document.getElementById('para-0');
-  const contentEl = document.getElementById('trans-content-0');
+  const block = silent ? null : document.getElementById('para-0');
+  const contentEl = silent ? null : document.getElementById('trans-content-0');
   if (block) block.classList.add('translating');
 
   try {
-    // Step 1: OCR
     if (contentEl) contentEl.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div><span style="font-size:12px;color:var(--text-hint);margin-left:8px;">OCR 识别中...</span>';
+    await renderPageImage(pageIdx);
+    if (signal.aborted) return false;
+
     const { data: { text } } = await Tesseract.recognize(page.imageData, 'chi_sim+eng');
+    if (signal.aborted) return false;
 
     if (!text.trim()) {
       page.translated = '此页无可识别的文字内容';
       if (contentEl) contentEl.textContent = page.translated;
-      if (block) block.classList.remove('translating');
       updateProgress();
       return true;
     }
 
-    // Step 2: Translate with DeepSeek text model
+    if (contentEl) contentEl.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div><span style="font-size:12px;color:var(--text-hint);margin-left:8px;">分析逻辑结构中...</span>';
+    let logicStructure = '';
+    try {
+      const r = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'system', content: ANALYZE_PROMPT }, { role: 'user', content: text }], temperature: 0.3, max_tokens: 1024 }),
+        signal
+      });
+      if (r.ok) logicStructure = (await r.json()).choices?.[0]?.message?.content || '';
+    } catch (e) { if (signal.aborted) return false; }
+
+    if (signal.aborted) return false;
+
+    const userPrompt = logicStructure
+      ? `编辑已经帮你分析好了这段内容，请严格按分析结果写出大白话版本。\n\n【编辑分析】\n${logicStructure}\n\n【原文】\n${text}\n\n要求：\n1. 按logical_chain的每一步顺序展开，一步都不能省\n2. key_concepts里的每个术语都要用analogy里的比喻来解释\n3. confusing_parts里提到的难点要重点讲清楚\n4. 第一段从core_point切入，最后一段呼应why_matters\n\n直接输出大白话正文，不要重复分析内容：`
+      : `请把下面内容转译成大白话：\n\n${text}`;
+
     if (contentEl) contentEl.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div><span style="font-size:12px;color:var(--text-hint);margin-left:8px;">转译中...</span>';
-
-    const systemPrompt = `你是一位能把复杂学术内容讲给普通人听的高手。你的任务是把用户给你的段落"转译"成大白话。
-
-规则：
-1. 用日常口语重新表达，像给一个聪明但没学过这个领域的朋友解释
-2. 遇到专业术语，先用大白话解释概念，再用【】标注原术语
-3. 可以用生活中的例子和类比来帮助理解
-4. 保留原文的核心意思，不要遗漏重要信息
-5. 如果原文有逻辑推导，把推导过程也讲清楚
-6. 语气自然亲切，不要像机器翻译
-7. 不要加"简单来说"、"换句话说"这类口水话开头，直接讲`;
-
-    if (/[^\x00-\xFF]/.test(apiKey)) {
-      showToast('API Key 含有非法字符，请重新粘贴');
-      if (block) block.classList.remove('translating');
-      if (contentEl) contentEl.innerHTML = '<span style="color:#D85A30;font-size:13px;">API Key 含有非法字符，请重新粘贴</span>';
-      return false;
-    }
 
     const response = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: text }
-        ],
-        stream: true
-      })
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userPrompt }], stream: true, temperature: 0.8, max_tokens: 4096 }),
+      signal
     });
 
-    if (!response.ok) {
-      const errBody = await response.text();
-      throw new Error(`API 错误: ${response.status} — ${errBody}`);
-    }
+    if (!response.ok) throw new Error(`API 错误: ${response.status} — ${await response.text()}`);
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let result = '';
-
-    if (contentEl) contentEl.innerHTML = '';
-    if (contentEl) contentEl.classList.add('streaming');
+    if (contentEl) { contentEl.innerHTML = ''; contentEl.classList.add('streaming'); }
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-      for (const line of lines) {
+      if (signal.aborted) { reader.cancel(); return false; }
+      for (const line of decoder.decode(value, { stream: true }).split('\n').filter(l => l.startsWith('data: '))) {
         const data = line.slice(6).trim();
         if (data === '[DONE]') continue;
         try {
-          const json = JSON.parse(data);
-          const delta = json.choices?.[0]?.delta?.content || '';
+          const delta = JSON.parse(data).choices?.[0]?.delta?.content || '';
           result += delta;
-          if (contentEl) contentEl.textContent = result;
-        } catch (e) { /* skip parse errors */ }
+          if (contentEl) contentEl.innerHTML = formatText(result);
+        } catch (e) {}
       }
     }
 
-    if (contentEl) contentEl.classList.remove('streaming');
+    if (contentEl) { contentEl.classList.remove('streaming'); contentEl.innerHTML = formatText(result); }
     page.translated = result;
-    if (block) block.classList.remove('translating');
     updateProgress();
     return true;
 
   } catch (err) {
-    if (contentEl) {
-      contentEl.classList.remove('streaming');
-      contentEl.innerHTML = `<span style="color:#D85A30;font-size:13px;">转译失败: ${escapeHtml(err.message)}</span>`;
-    }
-    if (block) block.classList.remove('translating');
+    if (err.name === 'AbortError') return false;
+    if (contentEl) { contentEl.classList.remove('streaming'); contentEl.innerHTML = `<span style="color:#D85A30;font-size:13px;">转译失败: ${escapeHtml(err.message)}</span>`; }
     return false;
+  } finally {
+    if (block) block.classList.remove('translating');
   }
 }
 
 async function translatePage() {
-  if (isTranslating) return;
-  const apiKey = document.getElementById('apiKey').value.trim();
-  if (!apiKey) { showToast('请先输入 DeepSeek API Key'); return; }
+  // 取消上一次转译
+  if (currentAbort) currentAbort.abort();
+  currentAbort = new AbortController();
+  const signal = currentAbort.signal;
+
   isTranslating = true;
-  await translatePageImage(currentPage);
-  isTranslating = false;
-  showToast('当前页转译完成');
+  try {
+    const ok = await translatePageImage(currentPage, signal);
+    if (ok && !signal.aborted) showToast('当前页转译完成');
+  } finally {
+    isTranslating = false;
+  }
+}
+
+function toggleAutoTranslate() {
+  const btn = document.getElementById('autoBtn');
+  if (autoTranslate) {
+    autoTranslate = false;
+    if (currentAbort) currentAbort.abort();
+    btn.textContent = '▶ 自动转译';
+    btn.classList.remove('btn-pause');
+    btn.classList.add('btn-primary');
+  } else {
+    autoTranslate = true;
+    btn.textContent = '⏸ 暂停';
+    btn.classList.remove('btn-primary');
+    btn.classList.add('btn-pause');
+    runAutoTranslate();
+  }
+}
+
+function setAutoOff() {
+  autoTranslate = false;
+  const btn = document.getElementById('autoBtn');
+  if (btn) { btn.textContent = '▶ 自动转译'; btn.classList.remove('btn-pause'); btn.classList.add('btn-primary'); }
+}
+
+async function runAutoTranslate() {
+  if (currentAbort) currentAbort.abort();
+  currentAbort = new AbortController();
+  const signal = currentAbort.signal;
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) { showToast('请先输入 DeepSeek API Key'); setAutoOff(); return; }
+
+  isTranslating = true;
+  try {
+    for (let p = currentPage; p < allPages.length; p++) {
+      if (signal.aborted || !autoTranslate) break;
+      if (allPages[p].translated) continue;
+      const silent = p !== currentPage;
+      if (silent) showToast(`后台转译第 ${allPages[p].pageNum} 页...`);
+      const ok = await translatePageImage(p, signal, silent);
+      if (!ok) break;
+    }
+    if (!signal.aborted && autoTranslate) {
+      showToast('全部页面转译完成！');
+      setAutoOff();
+    }
+  } finally {
+    isTranslating = false;
+  }
 }
 
 async function translateAll() {
-  if (isTranslating) return;
+  if (currentAbort) currentAbort.abort();
+  currentAbort = new AbortController();
+  const signal = currentAbort.signal;
   const apiKey = document.getElementById('apiKey').value.trim();
   if (!apiKey) { showToast('请先输入 DeepSeek API Key'); return; }
 
   isTranslating = true;
-  document.getElementById('translateAllBtn').disabled = true;
-  document.getElementById('translateAllBtn').textContent = '转译中...';
+  const btn = document.getElementById('translateAllBtn');
+  btn.disabled = true;
+  btn.textContent = '转译中...';
 
-  for (let p = 0; p < allPages.length; p++) {
-    currentPage = p;
-    await renderPage();
-    if (!allPages[p].translated) {
-      const ok = await translatePageImage(p);
-      if (!ok) {
-        isTranslating = false;
-        document.getElementById('translateAllBtn').disabled = false;
-        document.getElementById('translateAllBtn').textContent = '一键全部转译';
-        return;
-      }
-      await new Promise(r => setTimeout(r, 500));
+  try {
+    for (let p = 0; p < allPages.length; p++) {
+      if (signal.aborted) break;
+      if (allPages[p].translated) continue;
+      currentPage = p;
+      await renderPage();
+      const ok = await translatePageImage(p, signal);
+      if (!ok) break;
+      await new Promise(r => setTimeout(r, 300));
     }
+    if (!signal.aborted) showToast('全书转译完成！');
+  } finally {
+    isTranslating = false;
+    btn.disabled = false;
+    btn.textContent = '一键全部转译';
   }
-
-  isTranslating = false;
-  document.getElementById('translateAllBtn').disabled = false;
-  document.getElementById('translateAllBtn').textContent = '一键全部转译';
-  showToast('全书转译完成！');
 }
 
 // ===== Utils =====
+function formatText(text) {
+  return text.split(/\n{2,}/).filter(p => p.trim()).map(p => {
+    const content = p.trim().replace(/\n/g, ' ');
+
+    // 分隔线
+    if (/^---+$/.test(content)) {
+      return `<hr style="border:none;border-top:1px solid var(--border);margin:8px 0;">`;
+    }
+
+    const escaped = escapeHtml(content)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')  // **加粗**
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');              // *斜体*
+
+    const isPoint = /^[①②③④⑤⑥⑦⑧⑨⑩]|^第[一二三四五六七八九十]/.test(content);
+    const isNote = /^(注意|关键在这里|重点|警告)[\s——－-]/.test(content);
+
+    if (isNote) {
+      return `<p style="margin:0 0 16px;padding:8px 12px;background:var(--accent-light);border-left:3px solid var(--accent);border-radius:4px;">${escaped}</p>`;
+    }
+    return `<p style="margin:0 0 ${isPoint ? '8px' : '16px'};${isPoint ? 'padding-left:4px;' : ''}text-indent:${isPoint ? '0' : '2em'};">${escaped}</p>`;
+  }).join('');
+}
+
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
